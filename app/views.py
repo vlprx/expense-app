@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from flask import jsonify
 
 
@@ -8,7 +9,7 @@ def register_routes(app):
     def liveness_check():
         return jsonify({
             "status": "alive",
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }), 200
 
     @app.route("/healthz/ready", methods=["GET"])
@@ -16,5 +17,5 @@ def register_routes(app):
         return jsonify({
             "status": "ready",
             "database": "not_connected_yet",
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "timestamp": datetime.now(UTC).isoformat()
         }), 200
