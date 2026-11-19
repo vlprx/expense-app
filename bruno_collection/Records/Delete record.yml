@@ -1,0 +1,9 @@
+﻿info:
+  name: "Delete record"
+  type: http
+  seq: 10
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/record/1"
+  auth: none

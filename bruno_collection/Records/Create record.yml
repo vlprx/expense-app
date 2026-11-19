@@ -1,0 +1,14 @@
+﻿info:
+  name: "Create record"
+  type: http
+  seq: 8
+
+http:
+  method: POST
+  url: "{{baseUrl}}/record"
+  auth: none
+  body:
+    type: json
+    data: |-
+      {"user_id":1,"category_id":1,"amount":150.50}
+

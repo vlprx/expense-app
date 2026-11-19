@@ -1,0 +1,9 @@
+﻿info:
+  name: "Delete user"
+  type: http
+  seq: 4
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/user/1"
+  auth: none

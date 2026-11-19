@@ -1,0 +1,14 @@
+﻿info:
+  name: "Create category"
+  type: http
+  seq: 6
+
+http:
+  method: POST
+  url: "{{baseUrl}}/category"
+  auth: none
+  body:
+    type: json
+    data: |-
+      {"name":"Transport"}
+

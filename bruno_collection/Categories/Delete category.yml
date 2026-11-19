@@ -1,0 +1,9 @@
+﻿info:
+  name: "Delete category"
+  type: http
+  seq: 7
+
+http:
+  method: DELETE
+  url: "{{baseUrl}}/category/1"
+  auth: none
