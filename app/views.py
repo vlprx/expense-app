@@ -1,10 +1,27 @@
 
 from datetime import UTC, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from flask import jsonify, request
+from marshmallow import ValidationError
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-from app import storage
+from app.extensions import db
+from app.models import Account, Category, Record, User
+from app.schemas import (
+    CategorySchema,
+    DepositSchema,
+    RecordSchema,
+    UserSchema,
+)
+
+
+def validation_error(error):
+    return jsonify({
+        "error": "validation_error",
+        "messages": error.messages,
+    }), 400
 
 
 def register_routes(app):
@@ -14,164 +31,257 @@ def register_routes(app):
     def liveness_check():
         return jsonify({
             "status": "alive",
-            "timestamp": datetime.now(UTC).isoformat()
+            "timestamp": datetime.now(UTC).isoformat(),
         }), 200
 
-    # Перевірка готовності застосунку
+    # Перевірка готовності бази даних
     @app.route("/healthz/ready", methods=["GET"])
     def readiness_check():
-        return jsonify({
-            "status": "ready",
-            "database": "not_connected_yet",
-            "timestamp": datetime.now(UTC).isoformat()
-        }), 200
+        try:
+            db.session.execute(text("SELECT 1"))
+            return jsonify({
+                "status": "ready",
+                "database": "connected",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }), 200
+        except SQLAlchemyError:
+            db.session.rollback()
+            return jsonify({
+                "status": "not_ready",
+                "database": "disconnected",
+                "timestamp": datetime.now(UTC).isoformat(),
+            }), 503
 
     # ==================== USER ====================
 
-    # Отримання всіх користувачів
     @app.route("/users", methods=["GET"])
     def get_users():
-        return jsonify(list(storage.users.values())), 200
+        users = User.query.all()
+        return jsonify([
+            {"id": user.id, "name": user.name}
+            for user in users
+        ]), 200
 
-    # Отримання користувача за ID
     @app.route("/user/<int:user_id>", methods=["GET"])
     def get_user(user_id):
-        user = storage.users.get(user_id)
+        user = db.session.get(User, user_id)
 
         if user is None:
             return jsonify({"error": "User not found"}), 404
 
-        return jsonify(user), 200
+        return jsonify({
+            "id": user.id,
+            "name": user.name,
+            "account": {
+                "id": user.account.id,
+                "balance": str(user.account.balance),
+            } if user.account else None,
+        }), 200
 
-    # Створення користувача
     @app.route("/user", methods=["POST"])
     def create_user():
-        data = request.get_json(silent=True)
+        try:
+            data = UserSchema().load(request.get_json(silent=True) or {})
+        except ValidationError as error:
+            return validation_error(error)
 
-        if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"].strip():
-            return jsonify({"error": "Name is required"}), 400
+        user = User(name=data["name"].strip())
+        db.session.add(user)
+        db.session.flush()
 
-        user_id = storage.next_user_id
-        storage.next_user_id += 1
+        account = Account(
+            user_id=user.id,
+            balance=Decimal("0.00"),
+        )
 
-        user = {
-            "id": user_id,
-            "name": data["name"].strip()
-        }
+        db.session.add(account)
+        db.session.commit()
 
-        storage.users[user_id] = user
+        return jsonify({
+            "id": user.id,
+            "name": user.name,
+            "account": {
+                "id": account.id,
+                "balance": str(account.balance),
+            },
+        }), 201
 
-        return jsonify(user), 201
-
-    # Видалення користувача
     @app.route("/user/<int:user_id>", methods=["DELETE"])
     def delete_user(user_id):
-        if user_id not in storage.users:
+        user = db.session.get(User, user_id)
+
+        if user is None:
             return jsonify({"error": "User not found"}), 404
 
-        del storage.users[user_id]
+        db.session.delete(user)
+        db.session.commit()
 
         return "", 204
 
     # ==================== CATEGORY ====================
 
-    # Отримання всіх категорій
     @app.route("/category", methods=["GET"])
     def get_categories():
-        return jsonify(list(storage.categories.values())), 200
+        categories = Category.query.all()
 
-    # Створення категорії
+        return jsonify([
+            {"id": category.id, "name": category.name}
+            for category in categories
+        ]), 200
+
     @app.route("/category", methods=["POST"])
     def create_category():
-        data = request.get_json(silent=True)
+        try:
+            data = CategorySchema().load(request.get_json(silent=True) or {})
+        except ValidationError as error:
+            return validation_error(error)
 
-        if not isinstance(data, dict) or not isinstance(data.get("name"), str) or not data["name"].strip():
-            return jsonify({"error": "Name is required"}), 400
+        category = Category(name=data["name"].strip())
+        db.session.add(category)
+        db.session.commit()
 
-        category_id = storage.next_category_id
-        storage.next_category_id += 1
+        return jsonify({
+            "id": category.id,
+            "name": category.name,
+        }), 201
 
-        category = {
-            "id": category_id,
-            "name": data["name"].strip()
-        }
-
-        storage.categories[category_id] = category
-
-        return jsonify(category), 201
-
-    # Видалення категорії
     @app.route("/category/<int:category_id>", methods=["DELETE"])
     def delete_category(category_id):
-        if category_id not in storage.categories:
+        category = db.session.get(Category, category_id)
+
+        if category is None:
             return jsonify({"error": "Category not found"}), 404
 
-        del storage.categories[category_id]
+        db.session.delete(category)
+        db.session.commit()
 
         return "", 204
 
-    # ==================== RECORD ====================
+    # ==================== ACCOUNT ====================
 
-    # Створення запису про витрати
-    @app.route("/record", methods=["POST"])
-    def create_record():
-        data = request.get_json(silent=True)
+    @app.route("/account/<int:user_id>", methods=["GET"])
+    def get_account(user_id):
+        account = Account.query.filter_by(user_id=user_id).first()
 
-        if not isinstance(data, dict):
-            return jsonify({"error": "Invalid JSON"}), 400
+        if account is None:
+            return jsonify({"error": "Account not found"}), 404
+
+        return jsonify({
+            "id": account.id,
+            "user_id": account.user_id,
+            "balance": str(account.balance),
+        }), 200
+
+    @app.route("/account/<int:user_id>/deposit", methods=["POST"])
+    def deposit_account(user_id):
+        account = (
+            Account.query
+            .filter_by(user_id=user_id)
+            .with_for_update()
+            .first()
+        )
+
+        if account is None:
+            return jsonify({"error": "Account not found"}), 404
 
         try:
-            user_id = int(data["user_id"])
-            category_id = int(data["category_id"])
-            amount = Decimal(str(data["amount"]))
-        except (KeyError, ValueError, TypeError, InvalidOperation):
-            return jsonify({"error": "Invalid record data"}), 400
+            data = DepositSchema().load(request.get_json(silent=True) or {})
+        except ValidationError as error:
+            return validation_error(error)
 
-        if user_id not in storage.users:
+        account.balance += data["amount"]
+        db.session.commit()
+
+        return jsonify({
+            "message": "Account topped up successfully",
+            "user_id": user_id,
+            "balance": str(account.balance),
+        }), 200
+
+    # ==================== RECORD ====================
+
+    @app.route("/record", methods=["POST"])
+    def create_record():
+        try:
+            data = RecordSchema().load(request.get_json(silent=True) or {})
+        except ValidationError as error:
+            return validation_error(error)
+
+        user = db.session.get(User, data["user_id"])
+        category = db.session.get(Category, data["category_id"])
+
+        if user is None:
             return jsonify({"error": "User not found"}), 404
 
-        if category_id not in storage.categories:
+        if category is None:
             return jsonify({"error": "Category not found"}), 404
 
-        if not amount.is_finite() or amount <= 0:
-            return jsonify({"error": "Amount must be a positive number"}), 400
+        account = (
+            Account.query
+            .filter_by(user_id=user.id)
+            .with_for_update()
+            .first()
+        )
 
-        record_id = storage.next_record_id
-        storage.next_record_id += 1
+        if account is None:
+            return jsonify({"error": "Account not found"}), 404
 
-        record = {
-            "id": record_id,
-            "user_id": user_id,
-            "category_id": category_id,
-            "created_at": datetime.now(UTC).isoformat(),
-            "amount": str(amount)
-        }
+        amount = data["amount"]
 
-        storage.records[record_id] = record
+        if account.balance < amount:
+            return jsonify({
+                "error": "insufficient_funds",
+                "message": "Insufficient account balance",
+                "balance": str(account.balance),
+                "required": str(amount),
+            }), 400
 
-        return jsonify(record), 201
+        record = Record(
+            user_id=user.id,
+            category_id=category.id,
+            amount=amount,
+        )
 
-    # Отримання запису за ID
+        account.balance -= amount
+        db.session.add(record)
+        db.session.commit()
+
+        return jsonify({
+            "id": record.id,
+            "user_id": record.user_id,
+            "category_id": record.category_id,
+            "created_at": record.created_at.isoformat(),
+            "amount": str(record.amount),
+            "remaining_balance": str(account.balance),
+        }), 201
+
     @app.route("/record/<int:record_id>", methods=["GET"])
     def get_record(record_id):
-        record = storage.records.get(record_id)
+        record = db.session.get(Record, record_id)
 
         if record is None:
             return jsonify({"error": "Record not found"}), 404
 
-        return jsonify(record), 200
+        return jsonify({
+            "id": record.id,
+            "user_id": record.user_id,
+            "category_id": record.category_id,
+            "created_at": record.created_at.isoformat(),
+            "amount": str(record.amount),
+        }), 200
 
-    # Видалення запису
     @app.route("/record/<int:record_id>", methods=["DELETE"])
     def delete_record(record_id):
-        if record_id not in storage.records:
+        record = db.session.get(Record, record_id)
+
+        if record is None:
             return jsonify({"error": "Record not found"}), 404
 
-        del storage.records[record_id]
+        db.session.delete(record)
+        db.session.commit()
 
         return "", 204
 
-    # Фільтрація записів за користувачем та категорією
     @app.route("/record", methods=["GET"])
     def get_records():
         user_id = request.args.get("user_id")
@@ -180,24 +290,37 @@ def register_routes(app):
         if user_id is None and category_id is None:
             return jsonify({
                 "error": "invalid_request",
-                "message": "At least one query parameter ('user_id' or 'category_id') is required for filtration"
+                "message": (
+                    "At least one query parameter "
+                    "('user_id' or 'category_id') is required for filtration"
+                ),
             }), 400
 
         try:
             user_id = int(user_id) if user_id is not None else None
-            category_id = int(category_id) if category_id is not None else None
+            category_id = (
+                int(category_id) if category_id is not None else None
+            )
         except ValueError:
             return jsonify({"error": "Invalid query parameter"}), 400
 
-        filtered_records = []
+        query = Record.query
 
-        for record in storage.records.values():
-            if user_id is not None and record["user_id"] != user_id:
-                continue
+        if user_id is not None:
+            query = query.filter_by(user_id=user_id)
 
-            if category_id is not None and record["category_id"] != category_id:
-                continue
+        if category_id is not None:
+            query = query.filter_by(category_id=category_id)
 
-            filtered_records.append(record)
+        records = query.all()
 
-        return jsonify(filtered_records), 200
+        return jsonify([
+            {
+                "id": record.id,
+                "user_id": record.user_id,
+                "category_id": record.category_id,
+                "created_at": record.created_at.isoformat(),
+                "amount": str(record.amount),
+            }
+            for record in records
+        ]), 200

@@ -1,0 +1,13 @@
+info:
+  name: "Deposit account"
+  type: http
+  seq: 13
+
+http:
+  method: POST
+  url: "{{baseUrl}}/account/1/deposit"
+  auth: none
+  body:
+    type: json
+    data: |-
+      {"amount":"10.00"}
