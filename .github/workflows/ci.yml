@@ -8,8 +8,28 @@ on:
     branches: ["main", "master"]
 
 jobs:
-  lint-and-build:
+  lint-and-test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: expense_user
+          POSTGRES_PASSWORD: expense_password
+          POSTGRES_DB: expense_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U expense_user -d expense_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://expense_user:expense_password@localhost:5432/expense_db
+      TEST_DATABASE_URL: postgresql+psycopg2://expense_user:expense_password@localhost:5432/expense_db
+      JWT_SECRET_KEY: test-secret-key-for-expense-app-ci
 
     steps:
       - name: Checkout repository
@@ -24,10 +44,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install ruff
 
       - name: Run linter
-        run: ruff check app run.py
+        run: ruff check app tests run.py
+
+      - name: Run automated tests
+        run: pytest -v
 
       - name: Build Docker image
         run: docker build -t expense-app:latest .

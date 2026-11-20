@@ -14,6 +14,14 @@ class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
 
+    # Дані для аутентифікації та авторизації
+    password_hash = db.Column(db.String(255), nullable=True)
+    role = db.Column(
+        db.String(20),
+        nullable=False,
+        default="user",
+    )
+
     account = relationship(
         "Account",
         back_populates="user",
@@ -28,17 +36,26 @@ class User(db.Model):
     )
 
 
+
 class Category(db.Model):
     __tablename__ = "categories"
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
 
+    # Власник категорії; NULL означає глобальну категорію
+    user_id = db.Column(
+        db.Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+
     records = relationship(
         "Record",
         back_populates="category",
         cascade="all, delete-orphan",
     )
+
 
 
 class Account(db.Model):
