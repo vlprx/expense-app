@@ -49,7 +49,7 @@ jobs:
         run: ruff check app tests run.py
 
       - name: Run automated tests
-        run: pytest -v
+        run: python -m pytest -v
 
       - name: Build Docker image
         run: docker build -t expense-app:latest .
